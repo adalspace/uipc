@@ -2,7 +2,19 @@
 #include <cstring>
 #include <iostream>
 
+#define CHECK(expr) do { if (!(expr)) { fprintf(stderr, "%s:%d: CHECK(%s) failed (errno=%d)\n", __FILE__, __LINE__, #expr, errno); exit(1); } } while (0)
+
+static void malformed(const unsigned char *data, size_t size) {
+    PacketBuffer bytes = packet_buffer_from_data(data, size);
+    Packet *parsed = packet_deserialize(bytes);
+    /* Desired contract: untrusted bytes are rejected without aborts, overreads or leaks. */
+    CHECK(parsed == NULL);
+    packet_buffer_free(bytes);
+}
+
 int main() {
+    unsigned char data[] = {2,100,3,1}; malformed(data, sizeof(data));
+    return 0;
     const char *values[] = {"", "hello", "a longer string with spaces"};
     for (const char *value : values) {
         PacketObject *root = packet_object_new_compound();

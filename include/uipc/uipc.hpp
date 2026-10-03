@@ -1,9 +1,11 @@
 #pragma once
+
 #include "uipc.h"
 #include <cpl-basics/def.hpp>
 #include <cpl-basics/string.hpp>
 #include <cstdint>
 #include <cstring>
+#include <stdexcept>
 
 namespace uipc {
 
@@ -19,16 +21,20 @@ class response;
 class message {
 public:
     message(uint8_t version, message_type type, uint32_t request_id, const uint8_t *payload, size_t payload_size)
-        : M_payload(payload_size)
     {
-        M_payload.ResizeUninitialized(payload_size);
-        std::memcpy(M_payload.Data(), payload, payload_size);
+        if (payload_size > 0) {
+          M_payload.ResizeUninitialized(payload_size);
+          std::memcpy(M_payload.Data(), payload, payload_size);
+        }
         M_message = message_new(version, static_cast<::MessageType>(type), request_id, M_payload.Data(), M_payload.Size());
     }
 
     message(::Message *msg)
         : M_message(msg)
     {
+        if (!msg) {
+          throw std::runtime_error("constructing message from nullptr");
+        }
         size_t payload_size = 0;
         const uint8_t *payload = message_payload(msg, &payload_size);
         if (payload && payload_size > 0) {
@@ -36,6 +42,10 @@ public:
             std::memcpy(M_payload.Data(), payload, payload_size);
         }
     }
+
+    message(const message& other)
+        : message(other.version(), other.type(), other.request_id(), other.payload().Data(), other.payload().Size()) {}
+    message operator=(const message&) = delete;
 
     virtual ~message()
     {
@@ -59,7 +69,7 @@ private:
 class request : public message {
 public:
     request(uint8_t version, uint32_t request_id, const Byte *payload, size_t payload_size)
-        : message(UIPC_VERSION, message_type::REQUEST, request_id, payload, payload_size) { }
+        : message(version, message_type::REQUEST, request_id, payload, payload_size) { }
 
     static request from_message(const message &msg)
     {
@@ -68,12 +78,10 @@ public:
     }
     ~request() = default;
 public:
-    static uint32_t new_request_id() { return ++M_request_id; }
+    static uint32_t new_request_id() { return ++S_request_id; }
 public:
-    static Uint32 M_request_id;
+    inline static Uint32 S_request_id;
 }; // request
-
-Uint32 request::M_request_id = 0;
 
 class response : public message {
 private:
@@ -102,6 +110,9 @@ public:
         return connection(connection_from_socket(fd, pathname.c_str()));
     }
 
+    connection(const connection&) = delete;
+    connection operator=(const connection&) = delete;
+
     virtual ~connection()
     {
         close();
@@ -125,6 +136,14 @@ class server {
 public:
     server(const String &pathname)
         : M_server(server_create(pathname.c_str())) { }
+    server(const server&) = delete;
+    server operator=(const server&) = delete;
+    
+    virtual ~server()
+    {
+      close();
+      uipc_free(M_server);
+    }
 public:
     String address() const noexcept { return server_address(M_server); }
     bool listen() const { return server_listen(M_server); }

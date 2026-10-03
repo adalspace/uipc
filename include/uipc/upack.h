@@ -35,6 +35,7 @@ size_t packet_array_len(const PacketObject *array);
 PacketObject *packet_compound_insert(PacketObject *compound, const char* key, PacketObject *value);
 const PacketObject *packet_compound_get(const PacketObject *compound, const char* key);
 bool packet_compound_key_exists(const PacketObject *compound, const char* key);
+size_t packet_compound_records_len(const PacketObject *compound);
 
 void packet_free(Packet *packet);
 void packet_buffer_free(PacketBuffer buffer);
