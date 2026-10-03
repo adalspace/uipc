@@ -16,4 +16,5 @@ target_link_libraries(${UIPC_CPP} INTERFACE ${UIPC})
 add_library(uipc::c ALIAS ${UIPC})
 add_library(uipc::cpp ALIAS ${UIPC_CPP})
 
+include(CTest)
 add_subdirectory(sandbox)

@@ -16,7 +16,7 @@ typedef struct {
 
 typedef struct {
     int fd;
-    char *pathname;
+    char pathname[sizeof(((struct sockaddr_un*)0)->sun_path)];
 } _Connection;
 
 void uipc_free(void *ptr) {
@@ -45,9 +45,15 @@ void write_u32(uint8_t *buf, uint32_t value) {
 }
 
 Server *server_create(const char* pathname) {
-    _Server *srv = malloc(sizeof(_Server));
+    if (!pathname || strlen(pathname) >= sizeof(((struct sockaddr_un*)0)->sun_path)) {
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
+    _Server *srv = calloc(1, sizeof(_Server));
+    if (!srv) return NULL;
     srv->fd = socket(AF_UNIX, SOCK_STREAM, 0);
 
+    if (srv->fd < 0) { free(srv); return NULL; }
     srv->addr.sun_family = AF_UNIX;
     strcpy(srv->addr.sun_path, pathname);
 
@@ -56,6 +62,7 @@ Server *server_create(const char* pathname) {
     if (status != 0) {
         fprintf(stderr, "ERROR: Failed to bind '%s' as an address for the socket %d: %s\n", pathname, srv->fd, strerror(errno));
         close(srv->fd);
+        free(srv);
         return NULL;
     }
 
@@ -67,6 +74,7 @@ Server *server_create(const char* pathname) {
         fprintf(stderr, "ERROR: Failed to retrieve bound address of the %d socket: %s\n", srv->fd, strerror(errno));
         close(srv->fd);
         unlink(pathname);
+        free(srv);
         return NULL;
     }
 
@@ -74,6 +82,7 @@ Server *server_create(const char* pathname) {
         fprintf(stderr, "ERROR: Failed to bind specified address for socket %d: %s\n", srv->fd, strerror(errno));
         close(srv->fd);
         unlink(pathname);
+        free(srv);
         return NULL;
     }
 
@@ -89,8 +98,7 @@ bool server_listen(const Server* srv) {
     int status = listen(server->fd, 1);
     if (status != 0) {
         fprintf(stderr, "ERROR: Failed to start listening on %s: %s\n", server->addr.sun_path, strerror(errno));
-        close(server->fd);
-        unlink(server->addr.sun_path);
+        server_close((Server*)srv);
         return false;
     }
 
@@ -99,7 +107,8 @@ bool server_listen(const Server* srv) {
 
 Connection* server_accept(Server* srv) {
     _Server *server = (_Server*)srv;
-    _Connection *conn = malloc(sizeof(_Connection));
+    _Connection *conn = calloc(1, sizeof(_Connection));
+    if (!conn) return NULL;
 
     struct pollfd fd = {
         .fd = server->fd,
@@ -114,6 +123,7 @@ Connection* server_accept(Server* srv) {
             fprintf(stderr, ": %s", strerror(errno));
         }
         fprintf(stderr, "\n");
+        free(conn);
         return NULL;
     }
     assert(fd.revents != 0);
@@ -124,8 +134,7 @@ Connection* server_accept(Server* srv) {
     conn->fd = accept(server->fd, (struct sockaddr*)&client_addr, &client_addr_size);
     if (conn->fd == -1) {
         fprintf(stderr, "ERROR: Failed to accept connection from client socket: %s\n", strerror(errno));
-        close(server->fd);
-        unlink(server->addr.sun_path);
+        free(conn);
         return NULL;
     }
 
@@ -134,22 +143,32 @@ Connection* server_accept(Server* srv) {
 
 void server_close(Server* srv) {
     _Server *server = (_Server*)srv;
-    close(server->fd);
-    unlink(server->addr.sun_path);
+    if (server && server->fd >= 0) {
+        close(server->fd);
+        server->fd = -1;
+        unlink(server->addr.sun_path);
+    }
 }
 
 void connection_close(Connection *conn) {
     _Connection *connection = (_Connection*)conn;
-    close(connection->fd);
+    if (connection && connection->fd >= 0) {
+        close(connection->fd);
+        connection->fd = -1;
+    }
 }
 
 Connection *connection_allocate(const char* pathname) {
-    _Connection *conn = malloc(sizeof(_Connection));
+    _Connection *conn = calloc(1, sizeof(_Connection));
+    if (!conn) return NULL;
     assert(conn != NULL);
 
     conn->fd = -1;
-    conn->pathname = malloc(strlen(pathname) * sizeof(char));
-    assert(conn->pathname != NULL);
+    if (!pathname || strlen(pathname) >= sizeof(conn->pathname)) {
+        free(conn);
+        errno = ENAMETOOLONG;
+        return NULL;
+    }
     strcpy(conn->pathname, pathname);
 
     return (Connection*)conn;
@@ -158,6 +177,7 @@ Connection *connection_allocate(const char* pathname) {
 Connection *connection_from_socket(int fd, const char* addr) {
     _Connection *conn = (_Connection*)connection_allocate(addr);
 
+    if (!conn) return NULL;
     conn->fd = fd;
     assert(strcmp(conn->pathname, addr) == 0);
 
@@ -167,12 +187,11 @@ Connection *connection_from_socket(int fd, const char* addr) {
 bool connection_connect(const Connection *connection) {
     _Connection* conn = (_Connection*)connection;
     assert(conn->fd == -1 && "connection already bound");
-    assert(conn->pathname != NULL);
 
     conn->fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (conn->fd == -1) {
         fprintf(stderr, "ERROR: Failed to create a client socket: %s\n", strerror(errno));
-        return NULL;
+        return false;
     }
 
     struct sockaddr_un addr = {0};
@@ -182,6 +201,7 @@ bool connection_connect(const Connection *connection) {
     if (status == -1) {
         fprintf(stderr, "ERROR: Failed to connect to '%s': %s\n", conn->pathname, strerror(errno));
         close(conn->fd);
+        conn->fd = -1;
         return false;
     }
 
@@ -190,10 +210,11 @@ bool connection_connect(const Connection *connection) {
 
 int connection_recv(Connection *conn, void *buf, size_t capacity) {
     _Connection *connection = (_Connection*)conn;
-    int len = recv(connection->fd, buf, capacity, 0);
+    int len;
+    do { len = recv(connection->fd, buf, capacity, 0); } while (len < 0 && errno == EINTR);
     if (len == -1) {
         fprintf(stderr, "ERROR: Failed to read from client socket: %s\n", strerror(errno));
-        close(connection->fd);
+        connection_close(conn);
         return -1;
     }
 
@@ -202,56 +223,54 @@ int connection_recv(Connection *conn, void *buf, size_t capacity) {
 
 int connection_recv_bytes(Connection *conn, void *buf, size_t exact_size) {
     size_t bytes_read = 0;
-    do {
-        int n = connection_recv(conn, (void*)((uint8_t*)buf + bytes_read), exact_size - bytes_read);
-        bytes_read += n;
-    } while (bytes_read < exact_size);
-
-    assert(bytes_read == exact_size);
-    return bytes_read;
+    while (bytes_read < exact_size) {
+        int n = connection_recv(conn, (uint8_t*)buf + bytes_read, exact_size - bytes_read);
+        if (n <= 0) return -1;
+        bytes_read += (size_t)n;
+    }
+    return (int)bytes_read;
 }
 
 Message* connection_recv_message(Connection *conn) {
-    uint8_t *buf = malloc(4);
-    int n = connection_recv_bytes(conn, buf, 4);
-    uint32_t length = read_u32(buf);
-    printf("DEBUG: Message length is %d bytes\n", length);
-    buf = realloc(buf, length + 4);
-    n = connection_recv_bytes(conn, buf + 4, length);
-    printf("DEBUG: Read %d bytes of the message\n", n);
-    uint8_t version = buf[4];
-    MessageType type = buf[5];
-    uint32_t request_id = read_u32(buf + 6);
-    uint32_t payload_size = length - 6;
-    uint8_t *payload = malloc(payload_size * sizeof(uint8_t));
-    memcpy(payload, buf + 10, payload_size);
-    Message *msg = message_new(version, type, request_id, payload, payload_size);
-    uipc_free(buf);
+    uint8_t header[4];
+    if (connection_recv_bytes(conn, header, sizeof(header)) < 0) return NULL;
+    uint32_t length = read_u32(header);
+    if (length < 6 || length > 16 * 1024 * 1024) return NULL;
+    uint8_t *buf = malloc(length);
+    if (!buf) return NULL;
+    if (connection_recv_bytes(conn, buf, length) < 0 || buf[0] > UIPC_VERSION) {
+        free(buf);
+        return NULL;
+    }
+    Message *msg = message_new(buf[0], buf[1], read_u32(buf + 2), buf + 6, length - 6);
+    free(buf);
     return msg;
 }
 
 int connection_send(Connection *conn, void *buf, size_t size) {
     _Connection *connection = (_Connection*)conn;
-    ssize_t len = send(connection->fd, buf, size, 0);
-    if (len == -1) {
-        fprintf(stderr, "ERROR: Failed to send message to the client: %s\n", strerror(errno));
-        return 1;
+    size_t sent = 0;
+    while (sent < size) {
+        ssize_t n = send(connection->fd, (uint8_t*)buf + sent, size - sent, MSG_NOSIGNAL);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) return -1;
+        sent += (size_t)n;
     }
-    assert((size_t)len == size);
-    return len;
+    return (int)sent;
 }
 
 int connection_send_message(Connection *conn, const Message* message) {
     size_t msg_size = 4 + message->length;
     uint8_t *buf = malloc(msg_size);
+    if (!buf) return -1;
     write_u32(buf, message->length);
     buf[4] = message->version;
     buf[5] = message->type;
     write_u32(buf + 6, message->request_id);
     memcpy(buf + 10, message->payload, message->length - 6);
-    connection_send(conn, buf, msg_size);
+    int result = connection_send(conn, buf, msg_size);
     free(buf);
-    return msg_size;
+    return result;
 }
 
 Message* message_new(

@@ -71,6 +71,7 @@ static PacketObject *packet_object_new_sized_string(const char *value, size_t le
     object->string = (char*)malloc(sizeof(char) * len + 1);
     assert(object->string != NULL);
     memcpy(object->string, value, sizeof(char) * len);
+    object->string[len] = '\0';
     return (PacketObject*)object;
 }
 
@@ -88,6 +89,7 @@ PacketObject *packet_object_new_array(uint32_t capacity) {
 PacketObject *packet_object_new_compound() {
     _PacketObject *object = (_PacketObject*)packet_object_new(PACKET_OBJECT_COMPOUND);
     object->compound = NULL;
+    stbds_sh_new_strdup(object->compound);
     return (PacketObject*)object;
 }
 
@@ -157,7 +159,7 @@ static size_t packet_varint_serialize(PacketBuffer *buffer, uint32_t value) {
 
 static void packet_buffer_insert_sized_string(PacketBuffer *buffer, const char* string) {
     size_t n = strlen(string);
-    size_t s = packet_varint_serialize(buffer, n);
+    packet_varint_serialize(buffer, n);
     PacketBuffer cursor = stbds_arraddnptr(*buffer, n);
     memcpy(cursor, string, n);
 }
@@ -300,13 +302,13 @@ static uint32_t packet_varint_deserialize(PacketBuffer *buffer, uint32_t *result
 
 static PacketObject *packet_integer_deserialize(PacketBuffer *cursor) {
     uint32_t value = 0;
-    assert(packet_varint_deserialize(cursor, &value));
+    if (!packet_varint_deserialize(cursor, &value)) return NULL;
     return packet_object_new_integer(value);
 }
 
 static char *packet_buffer_extract_sized_string(PacketBuffer *cursor) {
     uint32_t len = 0;
-    assert(packet_varint_deserialize(cursor, &len));
+    if (!packet_varint_deserialize(cursor, &len)) return NULL;
     char *buf = (char*)malloc(sizeof(char) * (len + 1));
     memcpy(buf, *cursor, sizeof(char) * (len));
     buf[len] = '\0';
@@ -315,13 +317,16 @@ static char *packet_buffer_extract_sized_string(PacketBuffer *cursor) {
 }
 
 static PacketObject *packet_string_deserialize(PacketBuffer *cursor) {
-    return packet_object_new_string(packet_buffer_extract_sized_string(cursor));
+    char *value = packet_buffer_extract_sized_string(cursor);
+    PacketObject *object = packet_object_new_string(value);
+    free(value);
+    return object;
 }
 
 static PacketObject *packet_array_deserialize(PacketBuffer *cursor) {
     PacketObject *array = packet_object_new_array(128);
     uint32_t arrSize = 0;
-    assert(packet_varint_deserialize(cursor, &arrSize));
+    if (!packet_varint_deserialize(cursor, &arrSize)) return NULL;
     PacketBuffer start = *cursor;
     while (*cursor - start < arrSize) {
         packet_array_insert(array, packet_object_deserialize(cursor));
@@ -332,19 +337,19 @@ static PacketObject *packet_array_deserialize(PacketBuffer *cursor) {
 static PacketObject *packet_compound_deserialize(PacketBuffer *cursor) {
     PacketObject *compound = packet_object_new_compound();
     uint32_t compoundSize = 0;
-    assert(packet_varint_deserialize(cursor, &compoundSize));
+    if (!packet_varint_deserialize(cursor, &compoundSize)) return NULL;
     PacketBuffer start = *cursor;
     while (*cursor - start < compoundSize) {
         char *key = packet_buffer_extract_sized_string(cursor);
         PacketObject *value = packet_object_deserialize(cursor);
         packet_compound_insert(compound, key, value);
+        free(key);
     }
     return compound;
 }
 
 static PacketObject *packet_object_deserialize(PacketBuffer *cursor) {
     PacketObjectType type = (PacketObjectType)**cursor;
-    PacketBuffer original = *cursor;
     *cursor += 1;
     switch (type) {
         case PACKET_OBJECT_INTEGER: return packet_integer_deserialize(cursor); break;
