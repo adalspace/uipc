@@ -1,12 +1,14 @@
 #pragma once
 
-#include <string>
+#include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <functional>
 #include <limits>
 #include <ostream>
+#include <string>
 #include <string_view>
+#include <type_traits>
 
 #if __cplusplus >= 202002L
 #include <compare>
@@ -18,197 +20,349 @@
 template<typename SizeT = Uint32>
 class BasicString
 {
-	static_assert(
-		std::is_integral_v<SizeT> && std::is_unsigned_v<SizeT>,
-		"BasicString SizeT must be an unsigned integral type"
-	);
+    static_assert(
+        std::is_integral_v<SizeT> && std::is_unsigned_v<SizeT>,
+        "BasicString SizeT must be an unsigned integral type"
+    );
 
 public:
-	BasicString() = default;
+    static constexpr SizeT npos =
+        std::numeric_limits<SizeT>::max();
 
-	BasicString(const char* str)
-		: m_data(std::strlen(str))
-	{
-		m_data.ResizeUninitialized(std::strlen(str));
-		std::memcpy(m_data.Data(), str, m_data.Size());
-	}
-
-	BasicString(const std::string& str)
-		: BasicString(str.c_str()) { }
-
-	BasicString(const BasicString&) = default;
-	BasicString& operator=(const BasicString&) = default;
-
-	BasicString(BasicString&&) noexcept = default;
-	BasicString& operator=(BasicString&&) noexcept = default;
 public:
-	SizeT Size() const { return m_data.Size(); }
-	char* begin() noexcept { return m_data.begin(); }
-	const char* begin() const noexcept { return m_data.begin(); }
-	const char* cbegin() const noexcept { return m_data.cbegin(); }
+    BasicString()
+    {
+        // Always maintain a trailing '\0'.
+        m_data.ResizeUninitialized(1);
+        m_data.Data()[0] = '\0';
+    }
 
-	char* end() noexcept { return m_data.end(); }
-	const char* end() const noexcept { return m_data.end(); }
-	const char* cend() const noexcept { return m_data.cend(); }
+    BasicString(const char* str)
+    {
+        assert(str != nullptr);
 
-	char* c_str() const
-	{
-		char* buffer = new char[Size() + 1];
-		std::memcpy(buffer, m_data.Data(), Size());
-		buffer[Size()] = '\0';
-		return buffer;
-	}
+        const std::size_t len = std::strlen(str);
+
+        assert(len <= std::numeric_limits<SizeT>::max());
+
+        m_data.ResizeUninitialized(
+            static_cast<SizeT>(len) + 1
+        );
+
+        std::memcpy(m_data.Data(), str, len);
+        m_data.Data()[len] = '\0';
+    }
+
+    BasicString(const std::string& str)
+    {
+        assert(str.size() <= std::numeric_limits<SizeT>::max());
+
+        m_data.ResizeUninitialized(
+            static_cast<SizeT>(str.size()) + 1
+        );
+
+        std::memcpy(
+            m_data.Data(),
+            str.data(),
+            str.size()
+        );
+
+        m_data.Data()[str.size()] = '\0';
+    }
+
+    BasicString(const BasicString&) = default;
+    BasicString& operator=(const BasicString&) = default;
+
+    BasicString(BasicString&&) noexcept = default;
+    BasicString& operator=(BasicString&&) noexcept = default;
+
 public:
-	void Extend(const BasicString& other)
-	{
-		m_data.ResizeUninitialized(Size() + other.Size());
-		std::memcpy(m_data.Data() + Size() - other.Size(), other.m_data.Data(), other.Size());
-	}
+    SizeT Size() const noexcept
+    {
+        // m_data always includes one trailing '\0'.
+        return m_data.Size() - 1;
+    }
 
-	void Extend(const char* other)
-	{
-		auto len = std::strlen(other);
-		m_data.ResizeUninitialized(Size() + len);
-		std::memcpy(m_data.Data() + Size() - len, other, len);
-	}
+    bool Empty() const noexcept
+    {
+        return Size() == 0;
+    }
 
-	void Extend(char other)
-	{
-		m_data.Push(other);
-	}
-	
-	inline bool Empty() const noexcept
-	{
-		return m_data.Empty();
-	}
+    char* Data() noexcept
+    {
+        return m_data.Data();
+    }
 
-	BasicString Substr(SizeT pos, SizeT count = npos) const
-	{
-		assert(pos < Size());
-		SizeT length = std::min(Size() - pos, count);
-		BasicString result;
-		result.m_data.ResizeUninitialized(length);
-		std::memcpy(result.m_data.Data(), m_data.Data() + pos, length);
-		return result;
-	}
+    const char* Data() const noexcept
+    {
+        return m_data.Data();
+    }
 
-	SizeT Find(char what) const noexcept
-	{
-		for (SizeT i = 0; i < Size(); ++i)
-		{
-			if (m_data.At(i) == what)
-			{
-				return i;
-			}
-		}
-		return npos;
-	}
+    const char* c_str() const noexcept
+    {
+        return m_data.Data();
+    }
 
-	SizeT FindLastOf(char what) const noexcept
-	{
-		SizeT pos = npos;
-		for (SizeT i = 0; i < Size(); ++i)
-		{
-			if (m_data.At(i) == what) pos = i;
-		}
-		return pos;
-	}
+public:
+    char* begin() noexcept
+    {
+        return m_data.Data();
+    }
 
-	const char* Data() const noexcept
-	{
-		return m_data.Data();
-	}
+    const char* begin() const noexcept
+    {
+        return m_data.Data();
+    }
 
-	std::string_view View() const noexcept
-	{
-		// Avoid constructing a string_view from a potentially null pointer.
-		if (Size() == 0)
-			return {};
+    const char* cbegin() const noexcept
+    {
+        return m_data.Data();
+    }
 
-		return std::string_view(
-			Data(),
-			static_cast<std::size_t>(Size())
-		);
-	}
+    char* end() noexcept
+    {
+        return m_data.Data() + Size();
+    }
 
-	bool operator==(const BasicString& other) const noexcept
-	{
-		return View() == other.View();
-	}
+    const char* end() const noexcept
+    {
+        return m_data.Data() + Size();
+    }
 
-	std::strong_ordering operator<=>(const BasicString& other) const noexcept
-	{
-		return View() <=> other.View();
-	}
+    const char* cend() const noexcept
+    {
+        return m_data.Data() + Size();
+    }
 
-#if __cplusplus < 202002L
-	bool operator!=(const BasicString& other) const noexcept
-	{
-		return !(*this == other);
-	}
+public:
+    void Extend(const BasicString& other)
+    {
+        const SizeT oldSize = Size();
+        const SizeT addedSize = other.Size();
+
+        assert(
+            addedSize <=
+            std::numeric_limits<SizeT>::max() - oldSize
+        );
+
+        const SizeT newSize = oldSize + addedSize;
+
+        m_data.ResizeUninitialized(newSize + 1);
+
+        std::memcpy(
+            m_data.Data() + oldSize,
+            other.Data(),
+            addedSize
+        );
+
+        m_data.Data()[newSize] = '\0';
+    }
+
+    void Extend(const char* other)
+    {
+        assert(other != nullptr);
+
+        const std::size_t rawLen = std::strlen(other);
+
+        assert(rawLen <= std::numeric_limits<SizeT>::max());
+
+        const SizeT len = static_cast<SizeT>(rawLen);
+        const SizeT oldSize = Size();
+
+        assert(
+            len <=
+            std::numeric_limits<SizeT>::max() - oldSize
+        );
+
+        const SizeT newSize = oldSize + len;
+
+        m_data.ResizeUninitialized(newSize + 1);
+
+        std::memcpy(
+            m_data.Data() + oldSize,
+            other,
+            len
+        );
+
+        m_data.Data()[newSize] = '\0';
+    }
+
+    void Extend(char other)
+    {
+        const SizeT oldSize = Size();
+
+        assert(oldSize < std::numeric_limits<SizeT>::max());
+
+        m_data.ResizeUninitialized(oldSize + 2);
+
+        m_data.Data()[oldSize] = other;
+        m_data.Data()[oldSize + 1] = '\0';
+    }
+
+public:
+    BasicString Substr(
+        SizeT pos,
+        SizeT count = npos
+    ) const
+    {
+        assert(pos <= Size());
+
+        const SizeT available = Size() - pos;
+        const SizeT length =
+            count == npos
+                ? available
+                : std::min(available, count);
+
+        BasicString result;
+
+        result.m_data.ResizeUninitialized(length + 1);
+
+        if (length != 0)
+        {
+            std::memcpy(
+                result.m_data.Data(),
+                m_data.Data() + pos,
+                length
+            );
+        }
+
+        result.m_data.Data()[length] = '\0';
+
+        return result;
+    }
+
+    SizeT Find(char what) const noexcept
+    {
+        for (SizeT i = 0; i < Size(); ++i)
+        {
+            if (m_data.Data()[i] == what)
+                return i;
+        }
+
+        return npos;
+    }
+
+    SizeT FindLastOf(char what) const noexcept
+    {
+        for (SizeT i = Size(); i > 0; --i)
+        {
+            if (m_data.Data()[i - 1] == what)
+                return i - 1;
+        }
+
+        return npos;
+    }
+
+public:
+    std::string_view View() const noexcept
+    {
+        return std::string_view(
+            Data(),
+            static_cast<std::size_t>(Size())
+        );
+    }
+
+    bool operator==(
+        const BasicString& other
+    ) const noexcept
+    {
+        return View() == other.View();
+    }
+
+#if __cplusplus >= 202002L
+    std::strong_ordering operator<=>(
+        const BasicString& other
+    ) const noexcept
+    {
+        return View() <=> other.View();
+    }
+#else
+    bool operator!=(
+        const BasicString& other
+    ) const noexcept
+    {
+        return !(*this == other);
+    }
 #endif
 
-	BasicString operator+(const BasicString& other) const
-	{
-		BasicString str(*this);
-		str.Extend(other);
-		return str;
-	}
+public:
+    char& operator[](SizeT index) noexcept
+    {
+        assert(index < Size());
+        return m_data.Data()[index];
+    }
 
-	BasicString operator+(const char* other) const
-	{
-		BasicString str(*this);
-		str.Extend(other);
-		return str;
-	}
+    const char& operator[](SizeT index) const noexcept
+    {
+        assert(index < Size());
+        return m_data.Data()[index];
+    }
 
-	char operator[](SizeT index) noexcept
-	{
-		return char(m_data.At(index));
-	}
+    BasicString operator+(
+        const BasicString& other
+    ) const
+    {
+        BasicString result(*this);
+        result.Extend(other);
+        return result;
+    }
 
-	friend BasicString operator+(
-		const char* lhs,
-		const BasicString& rhs
-		)
-	{
-		BasicString result(lhs);
-		result.Extend(rhs);
-		return result;
-	}
+    BasicString operator+(
+        const char* other
+    ) const
+    {
+        BasicString result(*this);
+        result.Extend(other);
+        return result;
+    }
 
-	friend std::ostream& operator<<(
-		std::ostream& stream,
-		const BasicString& str
-		)
-	{
-		if (str.Size() > 0)
-		{
-			stream.write(
-				str.m_data.Data(),
-				static_cast<std::streamsize>(str.Size())
-			);
-		}
+    friend BasicString operator+(
+        const char* lhs,
+        const BasicString& rhs
+    )
+    {
+        BasicString result(lhs);
+        result.Extend(rhs);
+        return result;
+    }
 
-		return stream;
-	}
+    friend std::ostream& operator<<(
+        std::ostream& stream,
+        const BasicString& str
+    )
+    {
+        stream.write(
+            str.Data(),
+            static_cast<std::streamsize>(str.Size())
+        );
+
+        return stream;
+    }
+
 private:
-	Array<char, SizeT> m_data;
-	static const SizeT npos = -1;
+    // Invariant:
+    //
+    // m_data.Size() >= 1
+    // m_data.Data()[m_data.Size() - 1] == '\0'
+    //
+    // The terminating '\0' is NOT included in Size().
+    Array<char, SizeT> m_data;
 };
 
 namespace std
 {
-	template<typename SizeT>
-	struct hash<::BasicString<SizeT>>
-	{
-		std::size_t operator()(
-			const ::BasicString<SizeT>& value
-			) const noexcept
-		{
-			return std::hash<std::string_view>{}(value.View());
-		}
-	};
+    template<typename SizeT>
+    struct hash<::BasicString<SizeT>>
+    {
+        std::size_t operator()(
+            const ::BasicString<SizeT>& value
+        ) const noexcept
+        {
+            return std::hash<std::string_view>{}(
+                value.View()
+            );
+        }
+    };
 }
 
 using String = BasicString<>;
