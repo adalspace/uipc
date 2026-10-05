@@ -1,23 +1,28 @@
 #include "uipc/uipc.h"
 #include <assert.h>
+#include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/poll.h>
+#include <sys/socket.h>
 #include <unistd.h>
 #include <poll.h>
 
 typedef struct {
     int fd;
     struct sockaddr_un addr;
+    message_handler handler;
 } _Server;
 
 typedef struct {
     int fd;
     char pathname[sizeof(((struct sockaddr_un*)0)->sun_path)];
 } _Connection;
+
+static volatile sig_atomic_t shutdown_flag = 1;
 
 void uipc_free(void *ptr) {
     free(ptr);
@@ -49,8 +54,10 @@ Server *server_create(const char* pathname) {
         errno = ENAMETOOLONG;
         return NULL;
     }
-    _Server *srv = calloc(1, sizeof(_Server));
+    _Server *srv = malloc(sizeof(_Server));
     if (!srv) return NULL;
+
+    memset(srv, 0, sizeof(*srv));
     srv->fd = socket(AF_UNIX, SOCK_STREAM, 0);
 
     if (srv->fd < 0) { free(srv); return NULL; }
@@ -89,20 +96,13 @@ Server *server_create(const char* pathname) {
     return (Server*)srv;
 }
 
-const char* server_address(Server* srv) {
+const char* server_address(Server *srv) {
     return ((_Server*)srv)->addr.sun_path;
 }
 
-bool server_listen(const Server* srv) {
+void server_register_handler(Server *srv, message_handler handler) {
     _Server *server = (_Server*)srv;
-    int status = listen(server->fd, 1);
-    if (status != 0) {
-        fprintf(stderr, "ERROR: Failed to start listening on %s: %s\n", server->addr.sun_path, strerror(errno));
-        server_close((Server*)srv);
-        return false;
-    }
-
-    return true;
+    server->handler = handler;
 }
 
 Connection* server_accept(Server* srv) {
@@ -139,6 +139,52 @@ Connection* server_accept(Server* srv) {
     }
 
     return (Connection*)conn;
+}
+
+void server_graceful_shutdown_handler(int signal) {
+    shutdown_flag = 0;
+}
+
+bool server_graceful_shutdown(Server *srv) {
+    struct sigaction sigterm_action;
+    memset(&sigterm_action, 0, sizeof(sigterm_action));
+    sigterm_action.sa_handler = &server_graceful_shutdown_handler;
+    sigterm_action.sa_flags = 0;
+
+    if (sigfillset(&sigterm_action.sa_mask) != 0) return false;
+    if (sigaction(SIGINT, &sigterm_action, NULL) != 0) return false;
+
+    return true;
+}
+
+bool server_listen(Server* srv) {
+    _Server *server = (_Server*)srv;
+
+    int status = listen(server->fd, 1);
+    if (status != 0) {
+        fprintf(stderr, "ERROR: Failed to start listening on %s: %s\n", server->addr.sun_path, strerror(errno));
+        server_close((Server*)srv);
+        return false;
+    }
+
+    if (!server->handler) {
+        fprintf(stderr, "WARNING: No handler was registered for the server\n");
+    }
+
+    server_graceful_shutdown(srv);
+
+    while (server->fd != -1 && shutdown_flag) {
+        Connection *conn = server_accept(srv);
+        if (!conn) continue;
+        Message *request = connection_recv_message(conn);
+        if (server->handler) {
+            Message *response = (server->handler)(request);
+            if (response) connection_send_message(conn, response);
+        }
+        connection_close(conn);
+    }
+
+    return true;
 }
 
 void server_close(Server* srv) {
