@@ -177,6 +177,11 @@ bool server_listen(Server* srv) {
         Connection *conn = server_accept(srv);
         if (!conn) continue;
         Message *request = connection_recv_message(conn);
+        if (request->type != MSG_REQUEST) {
+            fprintf(stderr, "ERROR: Non-request message received from the client\n");
+            connection_close(conn);
+            continue;
+        }
         if (server->handler) {
             Message *response = (server->handler)(request);
             if (response) connection_send_message(conn, response);
