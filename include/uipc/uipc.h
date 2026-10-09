@@ -27,14 +27,14 @@ typedef struct {
     uint8_t payload[];
 } Message;
 
-typedef Message *(*message_handler)(Message*);
+typedef const Message *(*message_handler)(Message *request, void *arg);
 
 uint32_t read_u32(const uint8_t *buf);
 void write_u32(uint8_t *buf, uint32_t value);
 
 Server *server_create(const char *pathname);
 const char *server_address(Server *srv);
-void server_register_handler(Server *srv, message_handler handler);
+void server_register_handler(Server *srv, message_handler handler, void *arg);
 bool server_listen(Server *srv);
 // Connection *server_accept(Server *srv);
 void server_close(Server *srv);

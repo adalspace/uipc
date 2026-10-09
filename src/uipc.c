@@ -15,6 +15,7 @@ typedef struct {
     int fd;
     struct sockaddr_un addr;
     message_handler handler;
+    void *arg;
 } _Server;
 
 typedef struct {
@@ -60,7 +61,7 @@ Server *server_create(const char* pathname) {
     memset(srv, 0, sizeof(*srv));
     srv->fd = socket(AF_UNIX, SOCK_STREAM, 0);
 
-    if (srv->fd < 0) { free(srv); return NULL; }
+    if (srv->fd < 0) { uipc_free(srv); return NULL; }
     srv->addr.sun_family = AF_UNIX;
     strcpy(srv->addr.sun_path, pathname);
 
@@ -69,7 +70,7 @@ Server *server_create(const char* pathname) {
     if (status != 0) {
         fprintf(stderr, "ERROR: Failed to bind '%s' as an address for the socket %d: %s\n", pathname, srv->fd, strerror(errno));
         close(srv->fd);
-        free(srv);
+        uipc_free(srv);
         return NULL;
     }
 
@@ -81,7 +82,7 @@ Server *server_create(const char* pathname) {
         fprintf(stderr, "ERROR: Failed to retrieve bound address of the %d socket: %s\n", srv->fd, strerror(errno));
         close(srv->fd);
         unlink(pathname);
-        free(srv);
+        uipc_free(srv);
         return NULL;
     }
 
@@ -89,7 +90,7 @@ Server *server_create(const char* pathname) {
         fprintf(stderr, "ERROR: Failed to bind specified address for socket %d: %s\n", srv->fd, strerror(errno));
         close(srv->fd);
         unlink(pathname);
-        free(srv);
+        uipc_free(srv);
         return NULL;
     }
 
@@ -100,9 +101,10 @@ const char* server_address(Server *srv) {
     return ((_Server*)srv)->addr.sun_path;
 }
 
-void server_register_handler(Server *srv, message_handler handler) {
+void server_register_handler(Server *srv, message_handler handler, void *arg) {
     _Server *server = (_Server*)srv;
     server->handler = handler;
+    server->arg = arg;
 }
 
 Connection* server_accept(Server* srv) {
@@ -123,7 +125,7 @@ Connection* server_accept(Server* srv) {
             fprintf(stderr, ": %s", strerror(errno));
         }
         fprintf(stderr, "\n");
-        free(conn);
+        uipc_free(conn);
         return NULL;
     }
     assert(fd.revents != 0);
@@ -134,7 +136,7 @@ Connection* server_accept(Server* srv) {
     conn->fd = accept(server->fd, (struct sockaddr*)&client_addr, &client_addr_size);
     if (conn->fd == -1) {
         fprintf(stderr, "ERROR: Failed to accept connection from client socket: %s\n", strerror(errno));
-        free(conn);
+        uipc_free(conn);
         return NULL;
     }
 
@@ -183,7 +185,7 @@ bool server_listen(Server* srv) {
             continue;
         }
         if (server->handler) {
-            Message *response = (server->handler)(request);
+            const Message *response = (server->handler)(request, server->arg);
             if (response) connection_send_message(conn, response);
         }
         connection_close(conn);
@@ -216,7 +218,7 @@ Connection *connection_allocate(const char* pathname) {
 
     conn->fd = -1;
     if (!pathname || strlen(pathname) >= sizeof(conn->pathname)) {
-        free(conn);
+        uipc_free(conn);
         errno = ENAMETOOLONG;
         return NULL;
     }
@@ -290,11 +292,11 @@ Message* connection_recv_message(Connection *conn) {
     uint8_t *buf = malloc(length);
     if (!buf) return NULL;
     if (connection_recv_bytes(conn, buf, length) < 0 || buf[0] > UIPC_VERSION) {
-        free(buf);
+        uipc_free(buf);
         return NULL;
     }
     Message *msg = message_new(buf[0], buf[1], read_u32(buf + 2), buf + 6, length - 6);
-    free(buf);
+    uipc_free(buf);
     return msg;
 }
 
@@ -320,7 +322,7 @@ int connection_send_message(Connection *conn, const Message* message) {
     write_u32(buf + 6, message->request_id);
     memcpy(buf + 10, message->payload, message->length - 6);
     int result = connection_send(conn, buf, msg_size);
-    free(buf);
+    uipc_free(buf);
     return result;
 }
 
