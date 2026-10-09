@@ -132,6 +132,14 @@ private:
     friend class uipc::server;
 }; // class connection
 
+class message_handler {
+public:
+  message_handler() = default;
+  virtual ~message_handler() = default;
+public:
+  virtual response on_message(const message& message) = 0;
+};
+
 class server {
 public:
     server(const String &pathname)
@@ -146,8 +154,18 @@ public:
     }
 public:
     String address() const noexcept { return server_address(M_server); }
-    bool listen() const { return server_listen(M_server); }
-    connection accept_connection() { return connection(server_accept(M_server)); }
+    bool listen(message_handler *handler) const {
+      server_register_handler(M_server, [](Message* request, void *arg) -> const Message * {
+          message_handler *handler = reinterpret_cast<message_handler*>(arg);
+          if (handler) {
+            response res = handler->on_message(request);
+            message *res_msg = new message(res);
+            return res_msg->raw_message();
+          }
+          return NULL;
+      }, handler);
+      return server_listen(M_server); 
+    }
     void close() { server_close(M_server); }
 private:
     ::Server *M_server;
