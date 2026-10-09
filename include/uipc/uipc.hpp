@@ -52,13 +52,14 @@ public:
         uipc_free(M_message);
     }
 public:
-    [[nodiscard]] uint32_t length() const noexcept { return M_message->length; }
-    [[nodiscard]] uint8_t version() const noexcept { return M_message->version; }
-    [[nodiscard]] message_type type() const noexcept { return static_cast<message_type>(M_message->type); }
-    [[nodiscard]] uint32_t request_id() const noexcept { return M_message->request_id; }
-    [[nodiscard]] const Array<Byte>& payload() const noexcept { return M_payload; };
+    [[nodiscard]] uint32_t length() const noexcept { assert(M_message); return M_message->length; }
+    [[nodiscard]] uint8_t version() const noexcept { assert(M_message); return M_message->version; }
+    [[nodiscard]] message_type type() const noexcept { assert(M_message); return static_cast<message_type>(M_message->type); }
+    [[nodiscard]] uint32_t request_id() const noexcept { assert(M_message); return M_message->request_id; }
+    [[nodiscard]] const Array<Byte>& payload() const noexcept { assert(M_message); return M_payload; };
 
-    const Message *raw_message() const noexcept { return M_message; }
+    const Message *raw_message() const noexcept { assert(M_message); return M_message; }
+    Message *extract_raw_message() noexcept { assert(M_message); ::Message *tmp = M_message; M_message = nullptr; return tmp; }
 private:
     ::Message *M_message;
     Array<Byte> M_payload;
@@ -159,8 +160,7 @@ public:
           message_handler *handler = reinterpret_cast<message_handler*>(arg);
           if (handler) {
             response res = handler->on_message(request);
-            message *res_msg = new message(res);
-            return res_msg->raw_message();
+            return res.extract_raw_message();
           }
           return NULL;
       }, handler);
