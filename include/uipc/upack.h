@@ -28,6 +28,7 @@ PacketObject *packet_object_new_array(uint32_t capacity);
 PacketObject *packet_object_new_compound(void);
 
 const char *packet_object_string(const PacketObject *string);
+int packet_object_integer(const PacketObject *integer);
 
 PacketObject *packet_array_insert(PacketObject *array, PacketObject *item);
 const PacketObject *packet_array_get(const PacketObject *array, size_t index);
@@ -46,6 +47,8 @@ Packet *packet_deserialize(const PacketBuffer buffer);
 PacketBuffer packet_buffer_from_data(const uint8_t *data, size_t len);
 size_t packet_buffer_size(const PacketBuffer buffer);
 PacketBuffer packet_buffer_end(const PacketBuffer buffer);
+
+const char *packet_object_stringify(const PacketObject *obj);
 
 #ifdef __cplusplus
 }

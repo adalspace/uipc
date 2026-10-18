@@ -4,6 +4,8 @@
 #include <string.h>
 #define STB_DS_IMPLEMENTATION
 #include "stb_ds.h"
+#define NOB_IMPLEMENTATION
+#include "nob.h"
 #include <assert.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -99,6 +101,11 @@ PacketObject *packet_object_new_compound() {
 const char *packet_object_string(const PacketObject *string) {
     assert(packet_object_type(string) == PACKET_OBJECT_STRING);
     return ((_PacketObject*)string)->string;
+}
+
+int packet_object_integer(const PacketObject *integer) {
+    assert(packet_object_type(integer) == PACKET_OBJECT_INTEGER);
+    return ((_PacketObject*)integer)->integer;
 }
 
 PacketObject *packet_array_insert(PacketObject *restrict array, PacketObject *restrict item) {
@@ -397,3 +404,45 @@ Packet *packet_deserialize(const PacketBuffer buffer) {
     }
     return packet_new(root);
 }
+
+const char *packet_object_stringify(const PacketObject *obj) {
+    String_Builder sb = {0};
+
+    switch(packet_object_type(obj)) {
+    case PACKET_OBJECT_INTEGER:
+        sb_appendf(&sb, "%d", packet_object_integer(obj));
+        break;
+    case PACKET_OBJECT_STRING:
+    {
+        const char *str = packet_object_string(obj);
+        sb_appendf(&sb, "\"%s\"", str);
+        break;
+    }
+    case PACKET_OBJECT_ARRAY:
+    {
+        sb_append(&sb, '[');
+        for (size_t i = 0; i < packet_array_len(obj); ++i) {
+            sb_appendf(&sb, "%s", packet_object_stringify(packet_array_get(obj, i)));
+        }
+        sb_append(&sb, ']');
+        break;
+    }
+    case PACKET_OBJECT_COMPOUND:
+    {
+        sb_append(&sb, '{');
+        const _PacketObject *iobj = (const _PacketObject*)obj;
+        for (size_t i = 0; i < stbds_shlenu(iobj->compound); ++i) {
+            CompoundRecord record = iobj->compound[i];
+            if (i > 0) {
+                sb_appendf(&sb, ", ");
+            }
+            sb_appendf(&sb, "\"%s\": %s", record.key, packet_object_stringify((const PacketObject*)record.value));
+        }
+        sb_append(&sb, '}');
+        break;
+    }
+    }
+
+    return temp_sv_to_cstr(sb_to_sv(sb));
+}
+
